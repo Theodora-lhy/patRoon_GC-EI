@@ -36,6 +36,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   if (length(fGroups) == 0)
     return(compounds(algorithm = "library"))
 
+  if (checkIons != "none")
   adduct <- checkAndToAdduct(adduct, fGroups)
 
   gCount <- length(fGroups)
