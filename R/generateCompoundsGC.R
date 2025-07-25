@@ -9,6 +9,15 @@
 #' @export
 
 # Edited 25 Jul 2025 - Theodora - For GC-EI compound library search
+
+setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
+                                           minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
+                                           checkIons = "adduct", specSimParams = getDefSpecSimParams(),
+                                           specSimParamsLib = getDefSpecSimParams(), RI = NULL, RItol = 10) {
+  standardGeneric("generateCompoundsGC")
+})
+
+
 setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
                                                            minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
                                                            checkIons = "adduct",
