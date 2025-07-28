@@ -10,13 +10,15 @@
 
 # Edited 25 Jul 2025 - Theodora - For GC-EI compound library search
 
+# GENERIC
 setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
-                                           minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
-                                           checkIons = "adduct", specSimParams = getDefSpecSimParams(),
-                                           specSimParamsLib = getDefSpecSimParams(), RI = NULL, RItol = 10) {
+                                             minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
+                                             checkIons = "adduct", specSimParams = getDefSpecSimParams(),
+                                             specSimParamsLib = getDefSpecSimParams(), RI = NULL, RItol = 10) {
   standardGeneric("generateCompoundsGC")
 })
 
+# METHOD
 setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists, MSLibrary, 
                                                            minSim = 0.75, minAnnSim = minSim, absMzDev = 0.002,
                                                            adduct = NULL, checkIons = "adduct", 
@@ -24,10 +26,19 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
                                                            specSimParamsLib = getDefSpecSimParams(),
                                                            RI = NULL, RItol = 10) 
 {
+  # Set GC-EI-safe default spectrum cleaning
+  specSimParams$removePrecursor <- FALSE
+  specSimParams$relMinIntensity <- 0.005
+  specSimParams$minPeaks <- 5
+
+  specSimParamsLib$removePrecursor <- FALSE
+  specSimParamsLib$relMinIntensity <- 0.005
+  specSimParamsLib$minPeaks <- 5
+
+  # Validations
   ac <- checkmate::makeAssertCollection()
   checkmate::assertClass(MSPeakLists, "MSPeakLists", add = ac)
   checkmate::assertClass(MSLibrary, "MSLibrary", add = ac)
-  aapply(checkmate::assertNumber, . ~ minSim + minAnnSim + absMzDev, lower = 0, finite = TRUE, fixed = list(add = ac))
   checkmate::assertChoice(checkIons, c("adduct", "polarity", "none"), add = ac)
   assertSpecSimParams(specSimParams, add = ac)
   assertSpecSimParams(specSimParamsLib, add = ac)
@@ -37,29 +48,20 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     return(compounds(algorithm = "library"))
 
   if (checkIons != "none")
-  adduct <- checkAndToAdduct(adduct, fGroups)
+    adduct <- checkAndToAdduct(adduct, fGroups)
 
   gCount <- length(fGroups)
-  gInfo <- groupInfo(fGroups)
   annTbl <- annotations(fGroups)
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
 
-  # 🟡 GC-EI fallback: skip precursor filtering if largely missing
-  isEIlib <- all(is.na(libRecs$PrecursorMZ)) || all(is.na(libRecs$Precursor_type))
+  # 🔁 GC-EI: Relax field requirements
+  libRecs <- libRecs[!is.na(InChIKey) & !is.na(formula)]  # Removed SMILES, InChI, PrecursorMZ, etc.
 
-  if (!isEIlib) {
-    libRecs <- libRecs[!is.na(PrecursorMZ) & !is.na(SMILES) & !is.na(InChI) & !is.na(InChIKey) & !is.na(formula)]
-    if (checkIons == "adduct")
-      libRecs <- libRecs[!is.na(Precursor_type)]
-    else if (checkIons == "polarity")
-      libRecs <- libRecs[!is.na(Ion_mode)]
-  } else {
-    libRecs <- libRecs[!is.na(SMILES) & !is.na(InChI) & !is.na(InChIKey) & !is.na(formula)]
+  # 🔁 GC-EI: Optional RI filtering
+  if (!is.null(RI) && "RI" %in% names(libRecs)) {
+    libRecs[, RI := as.numeric(RI)]
   }
-
-  if (!is.null(adduct) && !isEIlib)
-    libRecs <- libRecs[Precursor_type == as.character(adduct)]
 
   if (!is.null(checkIons) && checkIons == "none")
     adduct <- NULL
@@ -79,6 +81,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
     if (is.null(MSPeakLists[[grp]]) || is.null(MSPeakLists[[grp]][["MS"]]))
       return(NULL)
+
     spec <- MSPeakLists[[grp]][["MS"]]
     if (is.null(spec) || nrow(spec) == 0)
       return(NULL)
@@ -90,6 +93,16 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
       return(NULL)
 
     cTab <- copy(libRecs)
+
+    # 🔁 Apply RI filtering
+    if (!is.null(RI) && "RI" %in% names(cTab)) {
+      thisRI <- RI[grp]
+      if (!is.na(thisRI))
+        cTab <- cTab[abs(RI - thisRI) <= RItol]
+    }
+
+    if (nrow(cTab) == 0)
+      return(NULL)
 
     hash <- makeHash(baseHash, spec, cTab, libSpecs[cTab$identifier])
     resultHashCount <<- resultHashCount + 1
@@ -122,8 +135,10 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     cTab <- cTab[numGTE(score, minSim)]
     setorderv(cTab, "score", -1)
     cTab <- unique(cTab, by = "InChIKey1")
+
     cTab[, explainedPeaks := sapply(lspecs[identifier], nrow)]
     cTab[, database := "library"]
+    cTab[, SpectrumType := "MS"]  # 🔵 Force MS type for GC-EI full scan
 
     saveCacheData("compoundsLibrary", cTab, hash, cacheDB)
     return(cTab)
