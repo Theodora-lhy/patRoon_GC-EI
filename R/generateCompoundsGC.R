@@ -9,24 +9,25 @@
 #' @export
 
 # Edited 25 Jul 2025 - Theodora - For GC-EI compound library search
-setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
-                                           minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
-                                           checkIons = "adduct", specSimParams = getDefSpecSimParams(),
-                                           specSimParamsLib = getDefSpecSimParams(), RI = NULL, RItol = 10) {
+setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary,
+                                           minSim = 0.75, minAnnSim = minSim, absMzDev = 0.002,
+                                           adduct = NULL, checkIons = "adduct",
+                                           specSimParams = getDefSpecSimParams(),
+                                           specSimParamsLib = getDefSpecSimParams(),
+                                           RI = NULL, RItol = 10, RIalkaneFile = NULL) {
   standardGeneric("generateCompoundsGC")
 })
 
-setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists, MSLibrary, 
+setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists, MSLibrary,
                                                            minSim = 0.75, minAnnSim = minSim, absMzDev = 0.002,
-                                                           adduct = NULL, checkIons = "adduct", 
-                                                           specSimParams = getDefSpecSimParams(), 
+                                                           adduct = NULL, checkIons = "adduct",
+                                                           specSimParams = getDefSpecSimParams(),
                                                            specSimParamsLib = getDefSpecSimParams(),
-                                                           RI = NULL, RItol = 10) 
-{
+                                                           RI = NULL, RItol = 10, RIalkaneFile = NULL) {
+
   ac <- checkmate::makeAssertCollection()
   checkmate::assertClass(MSPeakLists, "MSPeakLists", add = ac)
   checkmate::assertClass(MSLibrary, "MSLibrary", add = ac)
-  aapply(checkmate::assertNumber, . ~ minSim + minAnnSim + absMzDev, lower = 0, finite = TRUE, fixed = list(add = ac))
   checkmate::assertChoice(checkIons, c("adduct", "polarity", "none"), add = ac)
   assertSpecSimParams(specSimParams, add = ac)
   assertSpecSimParams(specSimParamsLib, add = ac)
@@ -44,12 +45,13 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
 
-  # 🟡 Relaxed filtering for GC-EI libraries
+  # 🟡 GC-EI fallback: no precursor info
   isEIlib <- all(is.na(libRecs$PrecursorMZ)) || all(is.na(libRecs$Precursor_type))
 
-  # 🔵 Modified filtering rules
-  libRecs <- libRecs[!is.na(InChIKey) & !is.na(formula)]  # Dropped SMILES, InChI, PrecursorMZ
+  # 🧹 Relaxed filter for GC-EI libraries
+  libRecs <- libRecs[!is.na(InChIKey) & !is.na(formula)]
   if (!isEIlib) {
+    libRecs <- libRecs[!is.na(PrecursorMZ)]
     if (checkIons == "adduct")
       libRecs <- libRecs[!is.na(Precursor_type)]
     else if (checkIons == "polarity")
@@ -62,6 +64,15 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   if (!is.null(checkIons) && checkIons == "none")
     adduct <- NULL
 
+  # 🔵 Load and prepare alkane dictionary
+  if (!is.null(RIalkaneFile)) {
+    alkDict <- fread(RIalkaneFile)
+    checkmate::assertNames(names(alkDict), must.include = c("Num", "RT"))
+    alkDict <- alkDict[order(RT)]
+  } else if (!is.null(RI)) {
+    stop("Retention index matching was requested, but RIalkaneFile is not provided.")
+  }
+
   cacheDB <- openCacheDBScope()
   baseHash <- makeHash(minSim, minAnnSim, absMzDev, adduct, checkIons, specSimParams, specSimParamsLib)
   setHash <- makeHash(fGroups, MSPeakLists, MSLibrary, baseHash)
@@ -69,20 +80,19 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   resultHashes <- vector("character", gCount)
   resultHashCount <- 0
 
-  printf("Processing %d feature groups with a library of %d records...
-", gCount, nrow(libRecs))
+  printf("Processing %d feature groups with a library of %d records...\n", gCount, nrow(libRecs))
 
-  compList <- withProg(length(fGroups), FALSE, sapply(names(fGroups), function(grp)
-  {
+  compList <- withProg(length(fGroups), FALSE, sapply(names(fGroups), function(grp) {
     doProgress()
 
     if (is.null(MSPeakLists[[grp]]) || is.null(MSPeakLists[[grp]][["MS"]]))
       return(NULL)
+
     spec <- MSPeakLists[[grp]][["MS"]]
     if (is.null(spec) || nrow(spec) == 0)
       return(NULL)
 
-    spec <- prepSpecSimilarityPL(spec, removePrecursor = FALSE,  # 🔵 disable for EI
+    spec <- prepSpecSimilarityPL(spec, removePrecursor = specSimParams$removePrecursor,
                                  relMinIntensity = specSimParams$relMinIntensity,
                                  minPeaks = specSimParams$minPeaks)
     if (nrow(spec) == 0)
@@ -90,12 +100,28 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
     cTab <- copy(libRecs)
 
-    # 🔵 RI filtering
-    if (!is.null(RI) && !is.null(gInfo$retIndex)) {
-      featRI <- gInfo[group == grp]$retIndex
-      if (!is.na(featRI)) {
-        cTab <- cTab[!is.na(RetentionIndex) & abs(RetentionIndex - featRI) <= RItol]
-        if (nrow(cTab) == 0) return(NULL)
+    # 🔵 RI matching: calculate RI of sample and filter
+    if (!is.null(RIalkaneFile)) {
+      featRT <- gInfo[group == grp]$RT
+      if (!length(featRT) || is.na(featRT))
+        return(NULL)
+
+      # Interpolate RI using alkane retention times
+      lower <- max(alkDict[RT <= featRT]$Num, na.rm = TRUE)
+      upper <- min(alkDict[RT >= featRT]$Num, na.rm = TRUE)
+      rtLower <- alkDict[Num == lower]$RT
+      rtUpper <- alkDict[Num == upper]$RT
+      if (length(rtLower) == 0 || length(rtUpper) == 0 || rtLower == rtUpper)
+        return(NULL)
+
+      # Linear interpolation
+      calcRI <- 100 * lower + 100 * (featRT - rtLower) / (rtUpper - rtLower)
+
+      # 🔵 Filter library if library RI exists
+      if ("RI" %in% names(cTab)) {
+        cTab <- cTab[abs(RI - calcRI) <= RItol]
+        if (nrow(cTab) == 0)
+          return(NULL)
       }
     }
 
@@ -112,8 +138,8 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     lspecs <- Map(libSpecs[cTab$identifier], cTab$ion_formula_mz, cTab$identifier, f = function(sp, pmz, lid) {
       ret <- copy(sp)
       ret[, ID := seq_len(.N)]
-      ret <- tryCatch(assignPrecursorToMSPeakList(ret, pmz), error = function(e) ret)
-      prepSpecSimilarityPL(ret, removePrecursor = FALSE,  # 🔵 disabled
+      ret <- assignPrecursorToMSPeakList(ret, pmz)
+      prepSpecSimilarityPL(ret, removePrecursor = specSimParamsLib$removePrecursor,
                            relMinIntensity = specSimParamsLib$relMinIntensity,
                            minPeaks = specSimParamsLib$minPeaks)
     })
@@ -127,18 +153,12 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
                          specSimParams$mzWeight, specSimParams$intWeight, specSimParams$absMzDev)
 
     cTab[, c("score", "libMatch") := sims[1, ]]
+    cTab[, SpectrumType := "GC-EI"]  # 🔵 Force annotation
     cTab <- cTab[numGTE(score, minSim)]
     setorderv(cTab, "score", -1)
     cTab <- unique(cTab, by = "InChIKey1")
     cTab[, explainedPeaks := sapply(lspecs[identifier], nrow)]
-    cTab[, SpectrumType := "MS"]  # 🔵 Force MS type for GC-EI
     cTab[, database := "library"]
-
-    if (!is.null(RI) && !is.null(gInfo$retIndex)) {
-      featRI <- gInfo[group == grp]$retIndex
-      if (!is.na(featRI))
-        cTab[, RI_delta := abs(RetentionIndex - featRI)]
-    }
 
     saveCacheData("compoundsLibrary", cTab, hash, cacheDB)
     return(cTab)
@@ -149,8 +169,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
   compList <- pruneList(compList, checkZeroRows = TRUE)
 
-  printf("Loaded %d compounds from %d features (%.2f%%).
-", sum(unlist(lapply(compList, nrow))),
+  printf("Loaded %d compounds from %d features (%.2f%%).\n", sum(unlist(lapply(compList, nrow))),
          length(compList), if (gCount == 0) 0 else length(compList) * 100 / gCount)
 
   return(compounds(groupAnnotations = compList, scoreTypes = c("score", "libMatch"),
