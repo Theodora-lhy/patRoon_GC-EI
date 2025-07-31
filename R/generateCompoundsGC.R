@@ -48,8 +48,15 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     adduct <- checkAndToAdduct(adduct, fGroups)
 
   gCount <- length(fGroups)
-  gInfo <- groupInfo(fGroups)
-  gInfo <- as.data.table(gInfo) 
+  gInfo <- as.data.table(groupInfo(fGroups))
+
+# Defensive check: rename 'retention time' column if it's not already 'ret'
+if (!"ret" %in% names(gInfo)) {
+  rtCol <- grep("^ret(ention)?", names(gInfo), value = TRUE, ignore.case = TRUE)
+  if (length(rtCol) == 1) setnames(gInfo, rtCol, "ret")
+  else stop("Retention time column not found in feature group info (needed to compute RI)")
+}
+ 
   annTbl <- annotations(fGroups)
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
