@@ -9,7 +9,7 @@
 #' @export
 
 # Edited 30 Jul 2025 - Theodora - GC-EI compound library search with RI support
-
+# Edited 25 Jul 2025 - Theodora - For GC-EI compound library search
 setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
                                            minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
                                            checkIons = "adduct", specSimParams = getDefSpecSimParams(),
@@ -32,14 +32,14 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   checkmate::assertChoice(checkIons, c("adduct", "polarity", "none"), add = ac)
   assertSpecSimParams(specSimParams, add = ac)
   assertSpecSimParams(specSimParamsLib, add = ac)
-
+  
   if (!is.null(RIalkaneFile)) {
     checkmate::assertDataFrame(RIalkaneFile, min.rows = 2, col.names = "named", add = ac)
     checkmate::assertSubset(c("Num", "RT.min"), colnames(RIalkaneFile), add = ac)
     RIalkaneFile <- as.data.table(RIalkaneFile)
-    RIalkaneFile[, RT.sec := RT.min * 60]  # Convert to seconds
+    RIalkaneFile[, RT.sec := RT.min * 60]
   }
-
+  
   checkmate::reportAssertions(ac)
 
   if (length(fGroups) == 0)
@@ -50,34 +50,39 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
   gCount <- length(fGroups)
 
-  # 🟢 Get retention time from groupInfo
   gInfo <- as.data.table(groupInfo(fGroups))
-  if ("ret" %in% names(gInfo)) {
-    gInfo[, RT := ret]
-  } else if ("rts" %in% names(gInfo)) {
-    gInfo[, RT := rts]
-  } else {
-    stop("Retention time column 'ret' or 'rts' not found in feature group info (needed to compute RI).")
+  gInfo[, group := rownames(groupInfo(fGroups))]
+
+  if (!"rts" %in% names(gInfo)) {
+    stop("Retention time column 'rts' not found in feature group info (needed to compute RI).")
+  }
+
+  # 🟢 Calculate RI for features if alkane file is provided
+  if (!is.null(RIalkaneFile)) {
+    featRTs <- gInfo$rts  # in seconds
+    calcRI <- approx(x = RIalkaneFile$RT.sec, y = RIalkaneFile$Num * 100, xout = featRTs, rule = 2)$y
+    gInfo[, RI := calcRI]
   }
 
   annTbl <- annotations(fGroups)
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
 
-  # 🟢 Try extracting RI from MSP 'Comments' field
+  # 🔵 Extract RI from MSP metadata if not already parsed
   if ("Comments" %in% colnames(libRecs)) {
     if (!"Retention_index" %in% colnames(libRecs)) {
       libRecs[, Retention_index := as.numeric(stringr::str_extract(Comments, "(?<=Retention_index: )[0-9.]+"))]
     }
   }
 
-  # 🟢 EI library check
   isEIlib <- all(is.na(libRecs$PrecursorMZ)) || all(is.na(libRecs$Precursor_type))
 
   if (!isEIlib) {
     libRecs <- libRecs[!is.na(PrecursorMZ) & !is.na(SMILES) & !is.na(InChI) & !is.na(InChIKey) & !is.na(formula)]
-    if (checkIons == "adduct") libRecs <- libRecs[!is.na(Precursor_type)]
-    else if (checkIons == "polarity") libRecs <- libRecs[!is.na(Ion_mode)]
+    if (checkIons == "adduct")
+      libRecs <- libRecs[!is.na(Precursor_type)]
+    else if (checkIons == "polarity")
+      libRecs <- libRecs[!is.na(Ion_mode)]
   } else {
     libRecs <- libRecs[!is.na(InChIKey) & !is.na(formula)]
   }
@@ -87,13 +92,6 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
   if (!is.null(checkIons) && checkIons == "none")
     adduct <- NULL
-
-  # 🟢 Compute RI for features
-  if (!is.null(RIalkaneFile)) {
-    featRTs <- gInfo[, RT]
-    calcRI <- approx(x = RIalkaneFile$RT.sec, y = RIalkaneFile$Num * 100, xout = featRTs, rule = 2)$y
-    gInfo[, RI := calcRI]
-  }
 
   cacheDB <- openCacheDBScope()
   baseHash <- makeHash(minSim, minAnnSim, absMzDev, adduct, checkIons, specSimParams, specSimParamsLib)
@@ -122,10 +120,10 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
     cTab <- copy(libRecs)
 
-    # 🔵 Filter by RI (only if both fRI and Retention_index present)
+    # 🔵 Filter by RI if available and applicable
     if (!is.null(RIalkaneFile) && "RI" %in% colnames(gInfo) && "Retention_index" %in% colnames(cTab)) {
-      fRI <- gInfo[.I[.GRP == which(names(fGroups) == grp)], RI]
-      if (!is.na(fRI)) {
+      fRI <- gInfo[group == grp, RI]
+      if (length(fRI) == 1 && !is.na(fRI)) {
         cTab <- cTab[!is.na(Retention_index) & abs(Retention_index - fRI) <= RItol]
       }
     }
@@ -163,7 +161,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     cTab <- unique(cTab, by = "InChIKey1")
     cTab[, explainedPeaks := sapply(lspecs[identifier], nrow)]
     cTab[, database := "library"]
-    cTab[, SpectrumType := "MS"]  # Label GC-EI
+    cTab[, SpectrumType := "MS"]
 
     saveCacheData("compoundsLibrary", cTab, hash, cacheDB)
     return(cTab)
@@ -182,4 +180,3 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
                                                                    libMatch = range(ct$libMatch)), simplify = FALSE),
                    algorithm = "library"))
 })
-
