@@ -31,15 +31,45 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   checkmate::assertChoice(checkIons, c("adduct", "polarity", "none"), add = ac)
   assertSpecSimParams(specSimParams, add = ac)
   assertSpecSimParams(specSimParamsLib, add = ac)
+setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
+                                           minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
+                                           checkIons = "adduct", specSimParams = getDefSpecSimParams(),
+                                           specSimParamsLib = getDefSpecSimParams(),
+                                           RIalkaneFile = NULL, RItol = 10) {
+  standardGeneric("generateCompoundsGC")
+})
+
+setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists, MSLibrary,
+                                                           minSim = 0.75, minAnnSim = minSim, absMzDev = 0.002,
+                                                           adduct = NULL, checkIons = "adduct",
+                                                           specSimParams = getDefSpecSimParams(),
+                                                           specSimParamsLib = getDefSpecSimParams(),
+                                                           RIalkaneFile = NULL, RItol = 10)
+{
+  ac <- checkmate::makeAssertCollection()
+  checkmate::assertClass(MSPeakLists, "MSPeakLists", add = ac)
+  checkmate::assertClass(MSLibrary, "MSLibrary", add = ac)
+  aapply(checkmate::assertNumber, . ~ minSim + minAnnSim + absMzDev, lower = 0, finite = TRUE, fixed = list(add = ac))
+  checkmate::assertChoice(checkIons, c("adduct", "polarity", "none"), add = ac)
+  assertSpecSimParams(specSimParams, add = ac)
+  assertSpecSimParams(specSimParamsLib, add = ac)
 
   if (!is.null(RIalkaneFile)) {
-    checkmate::assertDataFrame(RIalkaneFile, min.rows = 2, col.names = "named", add = ac)
-    if (!all(c("Num", "RT") %in% colnames(RIalkaneFile)))
-      stop("RIalkaneFile must contain columns named 'Num' and 'RT' (retention time in minutes).")
+    # 🔍 Debug info
+    cat("🧪 RIalkaneFile structure:\n")
+    print(str(RIalkaneFile))
+    cat("🧪 Class of RIalkaneFile:", class(RIalkaneFile), "\n")
+    cat("🧪 Column names:", paste(colnames(RIalkaneFile), collapse = ", "), "\n")
     
-    colnames(RIalkaneFile)[colnames(RIalkaneFile) == "RT"] <- "RT"  # Ensure exact match
+    # Validate
+    checkmate::assertDataFrame(RIalkaneFile, min.rows = 2, col.names = "named", add = ac)
+    checkmate::assertSubset(c("Num", "RT"), colnames(RIalkaneFile), add = ac)
+    checkmate::assertNumeric(RIalkaneFile$Num, add = ac)
+    checkmate::assertNumeric(RIalkaneFile$RT, add = ac)
+
+    # Convert to data.table and to seconds
     RIalkaneFile <- as.data.table(RIalkaneFile)
-    RIalkaneFile[, RT.sec := RT * 60]  # Convert to seconds
+    RIalkaneFile[, RT.sec := RT * 60]
   }
 
   checkmate::reportAssertions(ac)
@@ -178,3 +208,4 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
                                                                    libMatch = range(ct$libMatch)), simplify = FALSE),
                    algorithm = "library"))
 })
+
