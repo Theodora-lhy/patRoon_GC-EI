@@ -208,4 +208,3 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
                                                                    libMatch = range(ct$libMatch)), simplify = FALSE),
                    algorithm = "library"))
 })
-
