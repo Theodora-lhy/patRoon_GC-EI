@@ -207,4 +207,4 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
                    scoreRanges = sapply(compList, function(ct) list(score = range(ct$score),
                                                                    libMatch = range(ct$libMatch)), simplify = FALSE),
                    algorithm = "library"))
-})
+})  # <--- this closes the setMethod block
