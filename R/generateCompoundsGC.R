@@ -35,6 +35,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   if (!is.null(RIalkaneFile)) {
     checkmate::assertDataFrame(RIalkaneFile, min.rows = 2, col.names = "named", add = ac)
     checkmate::assertSubset(c("Num", "RT.min"), colnames(RIalkaneFile), add = ac)
+    RIalkaneFile <- as.data.table(RIalkaneFile)
     RIalkaneFile[, RT.sec := RT.min * 60]
   }
   
