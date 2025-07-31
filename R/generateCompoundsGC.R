@@ -49,6 +49,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
   gCount <- length(fGroups)
   gInfo <- groupInfo(fGroups)
+  gInfo <- as.data.table(gInfo) 
   annTbl <- annotations(fGroups)
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
