@@ -71,12 +71,8 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
 
-  # Extract RI from Comments and coerce numeric
-  if ("Comments" %in% colnames(libRecs)) {
-    if (!"Retention_index" %in% colnames(libRecs)) {
-      libRecs[, Retention_index := as.numeric(stringr::str_extract(Comments, "(?<=Retention_index: )[0-9.]+"))]
-    }
-    # Defensive numeric coercion
+  # Use existing Retention_index column, convert to numeric
+  if ("Retention_index" %in% colnames(libRecs)) {
     libRecs[, Retention_index := as.numeric(Retention_index)]
   }
 
@@ -125,7 +121,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
     cTab <- copy(libRecs)
 
-    # Debug and fix numeric coercion in RI filtering
+    # RI filtering with numeric coercion and debug prints
     if (!is.null(RIalkaneFile) && "RI" %in% colnames(gInfo) && "Retention_index" %in% colnames(cTab)) {
       fRI <- gInfo[group == grp, RI]
       cat(sprintf("Feature group: %s; Feature RI: %s\n", grp, fRI))
@@ -133,7 +129,6 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
       cat("Retention_index sample values:", head(cTab$Retention_index), "\n")
 
       if (length(fRI) == 1 && !is.na(fRI)) {
-        # Defensive numeric coercion on Retention_index before subtraction
         cTab[, Retention_index := as.numeric(Retention_index)]
         cTab <- cTab[!is.na(Retention_index) & abs(Retention_index - as.numeric(fRI)) <= RItol]
       }
