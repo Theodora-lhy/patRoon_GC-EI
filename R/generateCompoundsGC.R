@@ -9,7 +9,6 @@
 #' @export
 
 # Edited 30 Jul 2025 - Theodora - GC-EI compound library search with RI support
-# ---- Register the generic ----
 setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minSim = 0.75,
                                            minAnnSim = minSim, absMzDev = 0.002, adduct = NULL,
                                            checkIons = "adduct", specSimParams = getDefSpecSimParams(),
@@ -18,7 +17,6 @@ setGeneric("generateCompoundsGC", function(fGroups, MSPeakLists, MSLibrary, minS
   standardGeneric("generateCompoundsGC")
 })
 
-# ---- Define the method ----
 setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists, MSLibrary,
                                                            minSim = 0.75, minAnnSim = minSim, absMzDev = 0.002,
                                                            adduct = NULL, checkIons = "adduct",
@@ -34,7 +32,6 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   assertSpecSimParams(specSimParams, add = ac)
   assertSpecSimParams(specSimParamsLib, add = ac)
 
-  # ---- Retention Index: Check input and convert ----
   if (!is.null(RIalkaneFile)) {
     cat("🧪 RIalkaneFile structure:\n")
     print(str(RIalkaneFile))
@@ -64,7 +61,6 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     stop("Retention time column 'rts' not found in feature group info (needed to compute RI).")
   }
 
-  # ---- Calculate RI if alkane file provided ----
   if (!is.null(RIalkaneFile)) {
     featRTs <- gInfo$rts
     calcRI <- approx(x = RIalkaneFile$RT.sec, y = RIalkaneFile$Num * 100, xout = featRTs, rule = 2)$y
@@ -75,14 +71,15 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   libRecs <- records(MSLibrary)
   libSpecs <- spectra(MSLibrary)
 
-  # ---- Extract RI from Comments ----
+  # Extract RI from Comments and coerce numeric
   if ("Comments" %in% colnames(libRecs)) {
     if (!"Retention_index" %in% colnames(libRecs)) {
       libRecs[, Retention_index := as.numeric(stringr::str_extract(Comments, "(?<=Retention_index: )[0-9.]+"))]
     }
+    # Defensive numeric coercion
+    libRecs[, Retention_index := as.numeric(Retention_index)]
   }
 
-  # ---- Determine EI mode ----
   isEIlib <- all(is.na(libRecs$PrecursorMZ)) || all(is.na(libRecs$Precursor_type))
 
   if (!isEIlib) {
@@ -128,11 +125,17 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
 
     cTab <- copy(libRecs)
 
-    # ---- Filter by Retention Index ----
+    # Debug and fix numeric coercion in RI filtering
     if (!is.null(RIalkaneFile) && "RI" %in% colnames(gInfo) && "Retention_index" %in% colnames(cTab)) {
       fRI <- gInfo[group == grp, RI]
+      cat(sprintf("Feature group: %s; Feature RI: %s\n", grp, fRI))
+      cat("Retention_index class:", class(cTab$Retention_index), "\n")
+      cat("Retention_index sample values:", head(cTab$Retention_index), "\n")
+
       if (length(fRI) == 1 && !is.na(fRI)) {
-        cTab <- cTab[!is.na(Retention_index) & abs(Retention_index - fRI) <= RItol]
+        # Defensive numeric coercion on Retention_index before subtraction
+        cTab[, Retention_index := as.numeric(Retention_index)]
+        cTab <- cTab[!is.na(Retention_index) & abs(Retention_index - as.numeric(fRI)) <= RItol]
       }
     }
 
@@ -169,7 +172,7 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
     cTab <- unique(cTab, by = "InChIKey1")
     cTab[, explainedPeaks := sapply(lspecs[identifier], nrow)]
     cTab[, database := "library"]
-    cTab[, SpectrumType := "GC-EI"]  # ← GC-EI assignment
+    cTab[, SpectrumType := "GC-EI"]
 
     saveCacheData("compoundsLibrary", cTab, hash, cacheDB)
     return(cTab)
