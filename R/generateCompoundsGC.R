@@ -203,8 +203,11 @@ setMethod("generateCompoundsGC", "featureGroups", function(fGroups, MSPeakLists,
   printf("Loaded %d compounds from %d features (%.2f%%).\n", sum(unlist(lapply(compList, nrow))),
          length(compList), if (gCount == 0) 0 else length(compList) * 100 / gCount)
 
-  return(compounds(groupAnnotations = compList, scoreTypes = c("score", "libMatch"),
-                   scoreRanges = sapply(compList, function(ct) list(score = range(ct$score),
-                                                                   libMatch = range(ct$libMatch)), simplify = FALSE),
-                   algorithm = "library"))
-})  # <--- this closes the setMethod block
+  return(compounds(
+    groupAnnotations = compList,
+    scoreTypes = c("score", "libMatch"),
+    scoreRanges = sapply(compList, function(ct) list(score = range(ct$score),
+                                                     libMatch = range(ct$libMatch)), simplify = FALSE),
+    algorithm = "library"
+  ))  # closes return
+})  # closes setMethod
